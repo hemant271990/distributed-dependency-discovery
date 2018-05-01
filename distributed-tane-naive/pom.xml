@@ -1,0 +1,46 @@
+<project>
+  <groupId>uw</groupId>
+  <artifactId>distributed-tane-spark2</artifactId>
+  <modelVersion>4.0.0</modelVersion>
+  <version>1.0</version>
+  
+  <properties>
+     <maven.compiler.source>1.8</maven.compiler.source>
+     <maven.compiler.target>1.8</maven.compiler.target>
+  </properties>
+  
+  <repositories>
+    <repository>
+      <id>Akka repository</id>
+      <url>http://repo.akka.io/releases</url>
+    </repository>
+  </repositories>
+  <dependencies>
+    <dependency> <!-- Spark dependency -->
+      <groupId>org.apache.spark</groupId>
+      <artifactId>spark-core_2.10</artifactId>
+      <version>2.1.0</version>
+    </dependency>
+    <dependency> <!-- Spark dependency -->
+      <groupId>org.apache.spark</groupId>
+      <artifactId>spark-sql_2.10</artifactId>
+      <version>2.1.0</version>
+    </dependency>
+    <dependency> <!-- Spark dependency -->
+      <groupId>com.databricks</groupId>
+      <artifactId>spark-csv_2.10</artifactId>
+      <version>1.4.0</version>
+    </dependency>
+	<dependency>
+        <groupId>com.esotericsoftware</groupId>
+        <artifactId>kryo</artifactId>
+        <version>4.0.0</version>
+    </dependency>
+    <dependency>
+    	<groupId>com.google.code.gson</groupId>
+    	<artifactId>gson</artifactId>
+    	<version>2.7</version>
+	</dependency>
+  </dependencies>
+</project>
+
