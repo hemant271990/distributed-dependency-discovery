@@ -1,11 +1,14 @@
 package tane_impl;
 /*
  * Broadcasts data once and use it in every iteration. 
+ * lmPDP
  */
 import it.unimi.dsi.fastutil.longs.LongBigArrayBigList;
 import it.unimi.dsi.fastutil.objects.Object2ObjectOpenHashMap;
 import it.unimi.dsi.fastutil.objects.ObjectArrayList;
 import scala.Tuple2;
+import scala.collection.JavaConverters;
+import scala.collection.Seq;
 
 import java.io.FileInputStream;
 import java.io.FileNotFoundException;
@@ -14,6 +17,7 @@ import java.io.IOException;
 import java.io.ObjectInputStream;
 import java.io.ObjectOutputStream;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Iterator;
 import java.util.LinkedList;
@@ -33,6 +37,7 @@ import org.apache.spark.api.java.function.PairFunction;
 import org.apache.spark.broadcast.Broadcast;
 import org.apache.spark.sql.Dataset;
 import org.apache.spark.sql.Row;
+import org.apache.spark.sql.functions;
 
 public class DistributedTane2 {
 
@@ -117,6 +122,7 @@ public class DistributedTane2 {
     	for(Row r : rowList) {
     		for(int i = 0; i < numberAttributes; i++) {
     			table[currRow][i] = new Long(r.getLong(i)).intValue();
+    			//table[currRow][i] = Integer.parseInt(r.getString(i+1)); // for CSV
     		}
     		currRow++;
     	}
@@ -145,8 +151,10 @@ public class DistributedTane2 {
             long t3 = System.currentTimeMillis();
             pruneTime += t3-t2;
             
+            //final Broadcast<int[][]> b_table = sc.broadcast(table);
             // compute the combinations for the next level
             generateNextLevel(b_table);
+            //b_table.unpersist();
             long t4 = System.currentTimeMillis();
             l++;
             System.out.println(" Level: "+l + " time(s): " + (t4-t1)/1000);
@@ -446,6 +454,7 @@ public class DistributedTane2 {
         latticeGenTime += t2-t1;
         
         spComputation = spComputation + pruned_list.size();
+        long genSPTime = 0;
         LinkedList<OpenBitSet> batch = new LinkedList<OpenBitSet>();
         int full = 0; // checks how many entries added to combination_arr
         for(int l = 0; l < pruned_list.size(); l++) {
@@ -456,7 +465,10 @@ public class DistributedTane2 {
 	        if(full == batch_size || l == pruned_list.size()-1) { // then process the batch
 	        	System.out.println("Running Spark job for batch size: "+batch.size());
 		        JavaRDD<OpenBitSet> combinationsRDD = sc.parallelize(batch, numPartitions);
+		        long t4 = System.currentTimeMillis();
 		        Map<String, Integer> map = generateStrippedPartitions(combinationsRDD, b_table);
+		        long t5 = System.currentTimeMillis();
+		        genSPTime += t5-t4;
 				Iterator<Entry<String, Integer>> entry_itr = map.entrySet().iterator();
 				while(entry_itr.hasNext()){
 					Entry<String, Integer> e = entry_itr.next();
@@ -471,6 +483,7 @@ public class DistributedTane2 {
         long t3 = System.currentTimeMillis();
         genEQClassTime += t3-t2;
         level1 = new_level;
+        System.out.println("genSPTime(s): "+genSPTime/1000);
     }
 
     /**
@@ -524,6 +537,7 @@ public class DistributedTane2 {
     	final Broadcast<Integer> b_numberAttributes = sc.broadcast(numberAttributes);
     	JavaPairRDD<String, Integer> attrSpRDD2 = combinationsRDD.mapToPair(new PairFunction<OpenBitSet, String, Integer>(){
     		public Tuple2<String, Integer> call(OpenBitSet b) {
+    			long t1 = System.currentTimeMillis();
     			HashSet<ArrayList<Integer>> hashSet = new HashSet<ArrayList<Integer>>();
     			String combination = "";
     			int[][] table = b_table.value();
@@ -540,6 +554,8 @@ public class DistributedTane2 {
         			}
     				hashSet.add(value);
     			}
+    			long t2 = System.currentTimeMillis();
+    			//System.out.println(t2-t1);
     			return new Tuple2<String, Integer>(combination, hashSet.size());
     		}
     	});
@@ -562,6 +578,7 @@ public class DistributedTane2 {
     				l.add(i);
 					for(int j = 0; j < b_combinations.value()[i].length; j++) {
 						l.add((new Long(r.getLong(b_combinations.value()[i][j]-1))).intValue());
+						//l.add(Integer.parseInt(r.getString(b_combinations.value()[i][j]))); // for CSV
 					}
 					l.trimToSize();
 					hash.add(l);

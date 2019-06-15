@@ -33,7 +33,8 @@ public class TaneMain
         System.out.println(" ==== Total: " + (end - start)/1000 + " sec");
         Tane.sc.stop();*/
 		
-		DistributedTane1.sc = new JavaSparkContext(sparkConf); 
+		// smPDP
+		/*DistributedTane1.sc = new JavaSparkContext(sparkConf); 
 		Logger rootLogger = Logger.getRootLogger();
 		rootLogger.setLevel(Level.ERROR);
 		System.out.println(args.length);
@@ -59,9 +60,10 @@ public class TaneMain
 		DistributedTane1.execute();
         Long end = System.currentTimeMillis();
         System.out.println(" ==== Total: " + (end - start)/1000 + " sec");
-        DistributedTane1.sc.stop();
-        
-		/*DistributedTane2.sc = new JavaSparkContext(sparkConf); 
+        DistributedTane1.sc.stop();*/
+       
+		// lmPDP 
+		DistributedTane2.sc = new JavaSparkContext(sparkConf); 
 		Logger rootLogger = Logger.getRootLogger();
 		rootLogger.setLevel(Level.ERROR);
 		System.out.println(args.length);
@@ -76,7 +78,8 @@ public class TaneMain
 				  .appName("TaneMain")
 				  .getOrCreate();
 		DistributedTane2.df = spark.read().json(DistributedTane2.datasetFile);
-		//DistributedTane1.df.printSchema();
+		//DistributedTane2.df = spark.read().format("com.databricks.spark.csv").option("inferSchema", "false").load(DistributedTane2.datasetFile);
+		DistributedTane2.df.printSchema();
 		DistributedTane2.columnNames = DistributedTane2.df.columns();
 		DistributedTane2.numberAttributes = DistributedTane2.columnNames.length-1;
 		DistributedTane2.df.cache();
@@ -85,7 +88,8 @@ public class TaneMain
 		DistributedTane2.execute();
         Long end = System.currentTimeMillis();
         System.out.println(" ==== Total: " + (end - start)/1000 + " sec");
-        DistributedTane2.sc.stop();*/
-
+        DistributedTane2.sc.stop();
+        
+        
     }
 }

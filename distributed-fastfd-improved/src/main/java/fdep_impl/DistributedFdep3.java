@@ -183,6 +183,7 @@ public class DistributedFdep3 implements Serializable{
     	JavaRDD<HashSet<OpenBitSet>> differenceSetsRDD = pairsPartition.map(
     			new Function<Tuple2<Integer, Iterable<Tuple2<String, Row>>>, HashSet<OpenBitSet>>() {
     				public HashSet<OpenBitSet> call(Tuple2<Integer, Iterable<Tuple2<String, Row>>> t) {
+    					long t1 = System.currentTimeMillis();
     					HashSet<OpenBitSet> result_l = new HashSet<OpenBitSet>();
     					//FDTree negCoverTree = new FDTree(b_numberAttributes.value());
     					List<Row> left = new ArrayList<Row>();
@@ -234,6 +235,8 @@ public class DistributedFdep3 implements Serializable{
         						}
         					}
     					}
+    					long t2 = System.currentTimeMillis();
+    					//System.out.println(t2-t1);
     					return result_l;
     				}
     			});

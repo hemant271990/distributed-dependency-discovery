@@ -1,1 +1,16 @@
 Place the required libraries from the "libs" directory inside "src/libs/" directory of the respective projects.
+
+Example for running FastFDs-naive:
+- Go to directory 'distributed-fastfd-naive'
+- 'mvn package' to build
+- spark-submit --jars src/libs/lucene-core-4.5.1.jar,src/libs/fastutil-6.1.0.jar --class FastFDMain --master spark://husky:9988 --executor-memory 5G ./target/distributed-fastfd-spark2-1.0.jar hdfs://husky-06:8020/user/h2saxena/lineitem_index_500000_16.json
+
+Sample dataset with 5 columns and 20 rows is provided in file 'sample-dataset.json'. Spark reads json file using the code here: https://spark.apache.org/docs/2.1.0/sql-programming-guide.html#creating-dataframes.
+
+Datasets:
+adult: 		https://hpi.de/fileadmin/user_upload/fachgebiete/naumann/projekte/repeatability/DataProfiling/FD_Datasets/adult.csv
+lineitem:	www.tpc.org/tpch/
+homicide:	https://www.kaggle.com/murderaccountability/homicide-reports/data
+fd-reduced:	https://hpi.de/fileadmin/user_upload/fachgebiete/naumann/projekte/repeatability/DataProfiling/FD_Datasets/fd-reduced-30.zip
+ncvoter:	https://www.ncsbe.gov
+flight:		https://hpi.de/fileadmin/user_upload/fachgebiete/naumann/projekte/repeatability/DataProfiling/FD_Datasets/flight_1k.csv

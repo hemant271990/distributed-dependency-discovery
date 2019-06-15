@@ -323,9 +323,13 @@ public class DistributedFastFD10 implements Serializable
             }
         }).groupByKey();
 		
+		//DEBUG
+		//pairsPartition.count();
+		
 		JavaRDD<OpenBitSet> differenceSetsRDD = pairsPartition.flatMap(
     			new FlatMapFunction<Tuple2<String, Iterable<Tuple2<String, Row>>>, OpenBitSet>() {
     				public Iterator<OpenBitSet> call(Tuple2<String, Iterable<Tuple2<String, Row>>> t) {
+    					long t1 = System.currentTimeMillis();
     					HashSet<OpenBitSet> differenceSets = new HashSet<OpenBitSet>();
     					//int bkvAttr = Integer.parseInt(t._1.split("_")[1].split("C")[1]);
     					
@@ -396,10 +400,15 @@ public class DistributedFastFD10 implements Serializable
         						}
         					}
     					}
+    					long t2 = System.currentTimeMillis();
+    					//System.out.println(t2-t1);
     					return differenceSets.iterator();
     				}
     			});
 		
+		//DEBUG
+		//differenceSetsRDD.count();
+				
 		List<OpenBitSet> diff_attr_list = differenceSetsRDD.distinct().collect();
 		System.out.println("Difference set size: "+diff_attr_list.size());
 		long t2 = System.currentTimeMillis();

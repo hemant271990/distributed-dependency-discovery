@@ -1,10 +1,14 @@
 package tane_impl;
-
+/*
+ * This is a smPDP small memory plan
+ */
 import it.unimi.dsi.fastutil.longs.LongBigArrayBigList;
 import it.unimi.dsi.fastutil.objects.Object2ObjectOpenHashMap;
 import it.unimi.dsi.fastutil.objects.ObjectArrayList;
 import it.unimi.dsi.fastutil.objects.ObjectBigArrayBigList;
 import scala.Tuple2;
+import scala.collection.JavaConverters;
+import scala.collection.Seq;
 
 import java.io.BufferedReader;
 import java.io.BufferedWriter;
@@ -18,6 +22,7 @@ import java.io.ObjectOutputStream;
 import java.io.OutputStreamWriter;
 import java.util.ArrayList;
 import java.util.BitSet;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Hashtable;
 import java.util.Iterator;
@@ -46,6 +51,7 @@ import org.apache.spark.api.java.function.VoidFunction;
 import org.apache.spark.broadcast.Broadcast;
 import org.apache.spark.sql.Dataset;
 import org.apache.spark.sql.Row;
+import org.apache.spark.sql.functions;
 
 import com.google.gson.Gson;
 
@@ -103,7 +109,7 @@ public class DistributedTane1 {
 			full++;
 			
 			if(full == batch_size || l == numberAttributes) { // then process the batch
-				Map<String, Integer> map = generateStrippedPartitions(combination_arr, full);
+				Map<String, Integer> map = generateStrippedPartitionsGroupBy(combination_arr, full);
 				Iterator<Entry<String, Integer>> entry_itr = map.entrySet().iterator();
 				while(entry_itr.hasNext()){
 					Entry<String, Integer> e = entry_itr.next();
@@ -461,7 +467,7 @@ public class DistributedTane1 {
 			
 			if(full == batch_size || l == pruned_list.size()-1) { // then process the batch
 				System.out.println(" Starting Spark job at level: "+curr_level + " for batch size: "+full);
-				Map<String, Integer> map = generateStrippedPartitions(combination_arr, full);
+				Map<String, Integer> map = generateStrippedPartitionsGroupBy(combination_arr, full);
 				Iterator<Entry<String, Integer>> entry_itr = map.entrySet().iterator();
 				while(entry_itr.hasNext()){
 					Entry<String, Integer> e = entry_itr.next();
@@ -521,6 +527,25 @@ public class DistributedTane1 {
             e.printStackTrace();
         }
         return ch;
+    }
+    
+    public static Map<String, Integer> generateStrippedPartitionsGroupBy(int[][] combinations, int num_combinations) {
+    	Map<String, Integer> result = new HashMap<String, Integer>();
+    	for(int i = 0; i < num_combinations; i++){
+    		List<String> comb = new ArrayList<String>();
+    		String combStr = "";
+    		for(int j = 0; j < combinations[i].length; j++) {
+    			comb.add(df.columns()[combinations[i][j]-1]);
+    			combStr += "_"+combinations[i][j];
+    			//System.out.println(i+" "+j+" "+combinations[i][j]+" "+ df.columns()[combinations[i][j]-1]);
+    		}
+    		String firstC = comb.remove(0);
+    		Seq<String> combSeq = JavaConverters.asScalaIteratorConverter(comb.iterator()).asScala().toSeq();
+    		Long count = df.agg(functions.countDistinct(firstC, combSeq)).collectAsList().get(0).getLong(0);
+    		//System.out.println(" Count for "+firstC+" "+count);
+    		result.put(combStr, count.intValue());
+    	}
+    	return result;
     }
     
  // Works best, least size

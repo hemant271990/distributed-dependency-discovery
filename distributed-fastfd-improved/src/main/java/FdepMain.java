@@ -32,27 +32,8 @@ public class FdepMain
 		Fdep.execute();
 		Fdep.sc.stop();*/
 		
-		/*DistributedFdep1.sc = new JavaSparkContext(sparkConf);
-		DistributedFdep1.sc.hadoopConfiguration().set("dfs.replication", "1");
-		Logger rootLogger = Logger.getRootLogger();
-		rootLogger.setLevel(Level.ERROR);
-		DistributedFdep1.datasetFile = args[0];
-		DistributedFdep1.numPartitions = Integer.parseInt(args[1]);
-		System.out.println(args[0]);
-		System.out.println("numPartitions: "+args[1]);
-
-		SparkSession spark = SparkSession
-				  .builder()
-				  .appName("FDEPMain")
-				  .getOrCreate();
 		
-		DistributedFdep1.df = spark.read().json(DistributedFdep1.datasetFile);
-		DistributedFdep1.df.printSchema();
-		DistributedFdep1.columnNames = DistributedFdep1.df.columns();
-		DistributedFdep1.numberAttributes = DistributedFdep1.columnNames.length-1;
-		DistributedFdep1.execute();
-		DistributedFdep1.sc.stop();*/
-		
+		// smPDP
 		/*DistributedFdep2.sc = new JavaSparkContext(sparkConf);
 		DistributedFdep2.sc.hadoopConfiguration().set("dfs.replication", "1");
 		Logger rootLogger = Logger.getRootLogger();
@@ -72,6 +53,7 @@ public class FdepMain
 		DistributedFdep2.execute();
 		DistributedFdep2.sc.stop();*/
 		
+		// lmPDP
 		DistributedFdep3.sc = new JavaSparkContext(sparkConf);
 		DistributedFdep3.sc.hadoopConfiguration().set("dfs.replication", "1");
 		Logger rootLogger = Logger.getRootLogger();
@@ -82,6 +64,7 @@ public class FdepMain
 		System.out.println(args[0]);
 		System.out.println("numPartitions: "+args[1]);
 		System.out.println("sideLen: "+args[2]);
+		System.out.println(DistributedFdep3.sc.sc().applicationId());
 
 		SparkSession spark = SparkSession
 				  .builder()

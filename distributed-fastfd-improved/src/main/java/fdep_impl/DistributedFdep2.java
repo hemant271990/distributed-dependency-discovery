@@ -134,7 +134,7 @@ public class DistributedFdep2 implements Serializable{
     	final Broadcast<Integer> b_numberAttributes = sc.broadcast(numberAttributes);
     	negCoverTree = new FDTree(numberAttributes);
     	
-    	JavaRDD<Row> tableRDD = df.javaRDD().repartition(56);
+    	JavaRDD<Row> tableRDD = df.javaRDD().repartition(55);
     	JavaPairRDD<Integer, Row> rowMap = tableRDD.mapToPair(
     			new PairFunction<Row, Integer, Row>() {
 	    		  public Tuple2<Integer, Row> call(Row r) { 

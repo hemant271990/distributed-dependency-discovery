@@ -5,7 +5,7 @@ package hyfd_impl;
  * a) does not compute comparison suggestions,
  * b) Sampling phase: sample non-FDs from randomly partitioned data
  * c) switches between sampling and validation based on cost.
- * lmPDP
+ * d) No broadcast of data. Meant for small memory workers (smPDP)
  */
 import java.io.Serializable;
 import java.util.ArrayList;
@@ -21,18 +21,22 @@ import org.apache.lucene.util.OpenBitSet;
 import org.apache.spark.api.java.JavaPairRDD;
 import org.apache.spark.api.java.JavaRDD;
 import org.apache.spark.api.java.JavaSparkContext;
+import org.apache.spark.api.java.function.FilterFunction;
 import org.apache.spark.api.java.function.FlatMapFunction;
 import org.apache.spark.api.java.function.Function;
 import org.apache.spark.api.java.function.PairFunction;
 import org.apache.spark.broadcast.Broadcast;
 import org.apache.spark.sql.Dataset;
 import org.apache.spark.sql.Row;
+import org.apache.spark.sql.functions;
 
 import hyfd_helper.*;
 import it.unimi.dsi.fastutil.objects.ObjectArrayList;
 import scala.Tuple2;
+import scala.collection.JavaConverters;
+import scala.collection.Seq;
 
-public class DistributedHyFD3 implements Serializable {
+public class DistributedHyFD4 implements Serializable {
 
 	public enum Identifier {
 		INPUT_GENERATOR, NULL_EQUALS_NULL, VALIDATE_PARALLEL, ENABLE_MEMORY_GUARDIAN, MAX_DETERMINANT_SIZE, INPUT_ROW_LIMIT
@@ -51,10 +55,15 @@ public class DistributedHyFD3 implements Serializable {
 	public static long numberTuples = 0;
 	public static Integer numberAttributes = 0;
 	public static int numPartitions = 55; // #of horizontal data partitions
+	public static int numSubPartitions = 1;
+	public static int reps = 0;
 	//public static int samplerBatchSize = 66;
 	//public static int validatorBatchSize = 2000;
 	//public static int num_spark_task_factor = 2;
-	private static Map<Integer, Tuple2<Iterable<Integer>, Iterable<Integer>>> cartesianPartition = null;
+	//private static Map<Integer, Tuple2<Iterable<Integer>, Iterable<Integer>>> cartesianPartition = null;
+	//private static JavaPairRDD<Integer, Tuple2<Iterable<Row>, Iterable<Row>>> cartesianPartition = null;
+	private static JavaPairRDD<Integer, ArrayList<Row>> pairsPartition = null;
+    private static HashMap<Integer, ArrayList<Integer>> subPartitionMap = new HashMap<Integer, ArrayList<Integer>>();
 	private static int posInCartesianPartition = 0;
 	public static int batchSize = 55;
 	public static int validationBatchSize = 5000;
@@ -65,43 +74,44 @@ public class DistributedHyFD3 implements Serializable {
 	private static int level = 0;
 	private static int spComputation = 0;
 	private static int numNewNonFds = 0;
-	public static long localComputationTime = 0;
-	public static long dataShuffleTime = 0;
+	public static long genEQClassTime = 0;
+	public static long diffJoinTime = 0;
 	public static Inductor inductor = null;
 	
 	public static void execute(){
 		long startTime = System.currentTimeMillis();
 		valueComparator = new ValueComparator(true);
 		executeHyFD();
-		System.out.println(" localComputationTime time(s): " + localComputationTime/1000);
-        System.out.println(" dataShuffleTime time(s): " + dataShuffleTime/1000);
+		System.out.println(" genEQClassTime time(s): " + genEQClassTime/1000);
+        System.out.println(" diffJoin time(s): " + diffJoinTime/1000);
 		Logger.getInstance().writeln("Time: " + (System.currentTimeMillis() - startTime)/1000 + "s");
 	}
 
 	public static void executeHyFD(){
 		// Initialize
-		long t1 = System.currentTimeMillis();
 		Logger.getInstance().writeln("Loading data...");
 		loadData();
+		long t1 = System.currentTimeMillis();
 		partitionData();
-		
+		long t2 = System.currentTimeMillis();
+		diffJoinTime += t2-t1;
 		maxLhsSize = numberAttributes - 1;
 		//final int numRecords = new Long(numberTuples).intValue();
 
 		// Broadcast the table
-		int[][] table = new int[new Long(numberTuples).intValue()][numberAttributes];
+		/*int[][] table = new int[new Long(numberTuples).intValue()][numberAttributes];
     	int currRow = 0;
-    	List<Row> rowList = df.collectAsList();
+    	List<Row> rowList = getChunk(0, 100);
     	for(Row r : rowList) {
     		for(int i = 0; i < numberAttributes; i++) {
+    			System.out.print(r.getLong(i)+" ");
     			table[currRow][i] = new Long(r.getLong(i)).intValue();
     		}
+    		System.out.println();
     		currRow++;
     	}
-    	final Broadcast<int[][]> b_table = sc.broadcast(table);
-    	long t2 = System.currentTimeMillis();
-		dataShuffleTime += t2-t1;
-		
+    	final Broadcast<int[][]> b_table = sc.broadcast(table);*/
+    	
 		negCover = new FDSet(numberAttributes, maxLhsSize);
 		posCover = new FDTree(numberAttributes, maxLhsSize);
 		posCover.addMostGeneralDependencies();
@@ -110,15 +120,13 @@ public class DistributedHyFD3 implements Serializable {
 		
 		// Bootstrap with some non-FDs before starting the main algorithm
 		for(int i = 0; i < 1; i++) {
-			FDList newNonFds = enrichNegativeCover(b_table);
-			long t3 = System.currentTimeMillis();
+			System.out.println("Bootstraping round: "+i);
+			FDList newNonFds = enrichNegativeCover();
 			inductor.updatePositiveCover(newNonFds);
-			long t4 = System.currentTimeMillis();
-			localComputationTime += t4-t3;
 		}
     	
 		while(!posCover.getLevel(level).isEmpty()/*!level1_unique.isEmpty()*/ && level <= numberAttributes) {
-			validatePositiveCover(b_table);
+			validatePositiveCover();
 			
 			//FDList newNonFds = enrichNegativeCover(b_table);
 			//System.out.println(" #### of non FDs: " + newNonFds.size());
@@ -146,6 +154,21 @@ public class DistributedHyFD3 implements Serializable {
 		Logger.getInstance().writeln("... done! (" + numFDs + " FDs)");
 	}
 
+	private static List<Row> getChunk(long start, long end) {
+		final Broadcast<Long> b_start = sc.broadcast(start);
+		final Broadcast<Long> b_end = sc.broadcast(end);
+		List<Row> rowList = df.filter(new FilterFunction<Row>() {
+			@Override
+			public boolean call(Row r) throws Exception {
+				if(r.getLong(0) >= b_start.value() && r.getLong(0) < b_end.value())
+					return true;
+				else
+					return false;
+			}
+		}).collectAsList();
+		return rowList;
+	}
+	
 	private static ObjectArrayList<ColumnIdentifier> buildColumnIdentifiers() {
 		ObjectArrayList<ColumnIdentifier> columnIdentifiers = new ObjectArrayList<ColumnIdentifier>(columnNames.length);
 		for (String attributeName : columnNames)
@@ -158,62 +181,55 @@ public class DistributedHyFD3 implements Serializable {
         numberTuples = df.count();
     }
 
-	
-	/**
+    /**
      * Random partitioning of data.
      */
     private static void partitionData() {
+    	numSubPartitions = numPartitions/10;
+    	int key = 0;
+        for(int i = 0; i < numSubPartitions; i++) {
+        	for(int j = i; j < numSubPartitions; j++) {
+        		ArrayList<Integer> l = new ArrayList<Integer>();
+        		l.add(i);
+        		l.add(j);
+        		subPartitionMap.put(key++, l);
+        	}
+        }
+        
+        final Broadcast<Integer> b_numPartitions = sc.broadcast(numPartitions);
     	
-    	final Broadcast<Integer> b_numPartitions = sc.broadcast(numPartitions);
-    	
-    	JavaRDD<Row> tableRDD = df.javaRDD();
-    	JavaPairRDD<Integer, Integer> rowMap = tableRDD.mapToPair(
-    			new PairFunction<Row, Integer, Integer>() {
-	    		  public Tuple2<Integer, Integer> call(Row r) { 
-	    			  return new Tuple2<Integer, Integer>((int)(Math.random()*b_numPartitions.value()), new Long(r.getLong(r.size()-1)).intValue()); 
+    	JavaRDD<Row> tableRDD = df.javaRDD().repartition(numPartitions);
+    	JavaPairRDD<Integer, Row> rowMap = tableRDD.mapToPair(
+    			new PairFunction<Row, Integer, Row>() {
+	    		  public Tuple2<Integer, Row> call(Row r) { 
+	    			  return new Tuple2<Integer, Row>((int)(Math.random()*b_numPartitions.value()), r); 
 	    			  }
     		});
-    	JavaPairRDD<Integer, Iterable<Integer>> pairsPartition = rowMap.groupByKey();
-    	JavaPairRDD<Tuple2<Integer, Iterable<Integer>>, Tuple2<Integer, Iterable<Integer>>> joinedPairs = pairsPartition.cartesian(pairsPartition);
-    	joinedPairs = joinedPairs.filter(new Function<Tuple2<Tuple2<Integer, Iterable<Integer>>, Tuple2<Integer, Iterable<Integer>>>, Boolean> () {
-    		public Boolean call(Tuple2<Tuple2<Integer, Iterable<Integer>>, Tuple2<Integer, Iterable<Integer>>> t) {
-    			if(t._1._1 > t._2._1)
-    				return false;
-    			return true;
-    		}
+    	pairsPartition = rowMap.groupByKey().mapToPair(
+    			new PairFunction<Tuple2<Integer,Iterable<Row>>, Integer, ArrayList<Row>>() {
+		    		public Tuple2<Integer, ArrayList<Row>> call(Tuple2<Integer,Iterable<Row>> t) {
+		    			Iterable<Row> rl = t._2;
+		    			ArrayList<Row> list = new ArrayList<Row>();
+		    			for(Row r : rl)
+		    				list.add(r);
+		    			return new Tuple2<Integer, ArrayList<Row>>(t._1, list);
+		    		}
     	});
-    	// (1: {{1,2,3},{4,5,6}}; 2: {{1,2,3},{7,8,9}})
-    	cartesianPartition = joinedPairs.mapToPair(new PairFunction<Tuple2<Tuple2<Integer, Iterable<Integer>>, Tuple2<Integer, Iterable<Integer>>>, Iterable<Integer>, Iterable<Integer>>(){
-    		public Tuple2<Iterable<Integer>, Iterable<Integer>> call(Tuple2<Tuple2<Integer, Iterable<Integer>>, Tuple2<Integer, Iterable<Integer>>> t) {
-    			return new Tuple2<Iterable<Integer>, Iterable<Integer>>(t._1._2, t._2._2);
-    		}
-    	}).zipWithIndex().mapToPair(new PairFunction<Tuple2<Tuple2<Iterable<Integer>, Iterable<Integer>>, Long>, Integer, Tuple2<Iterable<Integer>, Iterable<Integer>>>(){
-    		public Tuple2<Integer, Tuple2<Iterable<Integer>, Iterable<Integer>>> call(Tuple2<Tuple2<Iterable<Integer>, Iterable<Integer>>, Long> t){
-    			return new Tuple2<Integer, Tuple2<Iterable<Integer>, Iterable<Integer>>>(t._2.intValue(), t._1);
-    		}
-    	}).collectAsMap();
-    	
-    	/*// DEBUG
-    	Map<Integer, Tuple2<Iterable<Row>, Iterable<Row>>> tmp = cartesianPartition.collectAsMap();
-    	for(Integer key: tmp.keySet()) {
-    		System.out.println(" ***** "+ key);
-    		System.out.println("LEFT:");
-    		for(Row r : tmp.get(key)._1)
-    			System.out.println(r);
-    		System.out.println("RIGHT:");
-    		for(Row r : tmp.get(key)._2)
-    			System.out.println(r);
-    	}*/
+    	pairsPartition.cache();
+    	System.out.println("Data partitioned...");
     }
 	
-    public static FDList enrichNegativeCover(final Broadcast<int[][]> b_table) {
+    public static FDList enrichNegativeCover() {
 		Logger.getInstance().writeln("Enriching Negative Cover ... ");
 		FDList newNonFds = new FDList(numberAttributes, negCover.getMaxDepth());
-		runNext(newNonFds, negCover, batchSize, b_table);
+		long t1 = System.currentTimeMillis();
+		runNext(newNonFds, negCover, batchSize, reps++);
+		long t2 = System.currentTimeMillis();
+		diffJoinTime += t2-t1;
 		return newNonFds;
 	}
 	
-	public static void runNext(FDList newNonFds, FDSet negCover, int batchSize, final Broadcast<int[][]> b_table) {
+	/*public static void runNext(FDList newNonFds, FDSet negCover, int batchSize, final Broadcast<int[][]> b_table) {
 		int previousNegCoverSize = newNonFds.size();
 		
 		long numComparisons = 0;
@@ -228,22 +244,9 @@ public class DistributedHyFD3 implements Serializable {
     	}
     	JavaPairRDD<Integer, Tuple2<Iterable<Integer>, Iterable<Integer>>> currentJobRDD = sc.parallelizePairs(currentMap, numPartitions);
     	
-    	// DEBUG
-    	/*Map<Integer, Tuple2<Iterable<Integer>, Iterable<Integer>>> tmp = currentJobRDD.collectAsMap();
-    	for(Integer key: tmp.keySet()) {
-    		System.out.println(" ***** "+ key);
-    		System.out.println("LEFT:");
-    		for(Integer r : tmp.get(key)._1)
-    			System.out.println(r);
-    		System.out.println("RIGHT:");
-    		for(Integer r : tmp.get(key)._2)
-    			System.out.println(r);
-    	}*/
-    	
     	JavaRDD<HashSet<OpenBitSet>> nonFDsHashetRDD = currentJobRDD.map(
 				new Function<Tuple2<Integer, Tuple2<Iterable<Integer>, Iterable<Integer>>>, HashSet<OpenBitSet>>() {
 					public HashSet<OpenBitSet> call(Tuple2<Integer, Tuple2<Iterable<Integer>, Iterable<Integer>>> t) {
-						long t1 = System.currentTimeMillis();
 						HashSet<OpenBitSet> result_l = new HashSet<OpenBitSet>();
     					//FDTree negCoverTree = new FDTree(b_numberAttributes.value());
     					Iterable<Integer> l1 = t._2._1;
@@ -263,8 +266,6 @@ public class DistributedHyFD3 implements Serializable {
     					        result_l.add(equalAttrs);
     						}
     					}
-    					long t2 = System.currentTimeMillis();
-    					System.out.println(t2-t1);
     					return result_l;
 					}
 		});
@@ -274,17 +275,7 @@ public class DistributedHyFD3 implements Serializable {
     			return hs.iterator();
     		}
     	}).distinct();
-		
-    	// DEBUG
-		/*System.out.println(" Print NegCover: ");
-		List<OpenBitSet> l = nonFDsRDD.collect();
-		for(OpenBitSet b : l) {
-			for(int i = 0; i < numberAttributes; i++)
-				if(b.get(i))
-					System.out.print(i+" ");
-			System.out.println();
-		}*/
-    	long t1 = System.currentTimeMillis();
+		    	
 		for(OpenBitSet nonFD : nonFDsRDD.collect()) {
 			if (!negCover.contains(nonFD)) {
 				//System.out.println(" Add the above to negCover");
@@ -301,14 +292,94 @@ public class DistributedHyFD3 implements Serializable {
 		numNewNonFds = newNonFds.size() - previousNegCoverSize;
 		float efficiency = (float) numNewNonFds/numComparisons;
 		System.out.println("new NonFDs: "+numNewNonFds+" # comparisons: "+numComparisons+" efficiency: "+efficiency+" efficiency threshold: "+efficiencyThreshold);
-		long t2 = System.currentTimeMillis();
-		localComputationTime += t2-t1;
+	}*/
+	
+	
+	public static void runNext(FDList newNonFds, FDSet negCover, int batchSize, int key) {
+		int previousNegCoverSize = newNonFds.size();
+		long numComparisons = 0;
+		
+		if(key >= subPartitionMap.size()){
+			numNewNonFds = 0;
+			return;
+		}
+			
+		final Broadcast<Integer> b_numberAttributes = sc.broadcast(numberAttributes);
+    	final Broadcast<Integer> b_numSubPartitions = sc.broadcast(numSubPartitions);
+		final Broadcast<Integer> b_key = sc.broadcast(key);
+		final Broadcast<HashMap<Integer, ArrayList<Integer>>> b_subPartitionMap = sc.broadcast(subPartitionMap);
+    	JavaRDD<HashSet<OpenBitSet>> nonFDsHashetRDD = pairsPartition.map(
+    			new Function<Tuple2<Integer, ArrayList<Row>>, HashSet<OpenBitSet>>() {
+    				public HashSet<OpenBitSet> call(Tuple2<Integer, ArrayList<Row>> t) {
+    					HashSet<OpenBitSet> result_l = new HashSet<OpenBitSet>();
+    					ArrayList<Row> rl0 = new ArrayList<Row>();
+    					ArrayList<Row> rl1 = new ArrayList<Row>();
+    					int part0 = b_subPartitionMap.value().get(b_key.value()).get(0);
+    					int part1 = b_subPartitionMap.value().get(b_key.value()).get(1);
+    					int sampleSize = t._2.size()/b_numSubPartitions.value();
+    					int start0 = (part0*sampleSize) % t._2.size();
+    					int start1 = (part1*sampleSize) % t._2.size();
+    					int count = 0;
+    					while(count < sampleSize) {
+    						rl0.add(t._2.get(start0++));
+    						count++;
+    					}
+    					
+    					count = 0;
+    					while(count < sampleSize) {
+    						rl1.add(t._2.get(start1++));
+    						count++;
+    					}
+    					
+    					for(Row r0 : rl0) {
+    						for(Row r1 : rl1) {
+    							
+    							OpenBitSet equalAttrs = new OpenBitSet(b_numberAttributes.value());
+    					        for (int i = 0; i < b_numberAttributes.value(); i++) {
+    					            long val0 = r0.getLong(i);
+    					            long val1 = r1.getLong(i);
+    					            // Handling of null values. Currently assuming NULL values are equal.
+    					            if (val0 >= 0 && val1 >= 0 && val0 == val1) {
+    					                // OpenBitSet start with 1 for first attribute
+    					                equalAttrs.set(i);
+    					            }
+    					        }
+    					        result_l.add(equalAttrs);
+    						}
+    					}
+    					return result_l;
+    				}
+    			});
+    	
+    	JavaRDD<OpenBitSet> nonFDsRDD = nonFDsHashetRDD.flatMap(new FlatMapFunction<HashSet<OpenBitSet>, OpenBitSet>(){
+    		public Iterator<OpenBitSet> call(HashSet<OpenBitSet> hs) {
+    			return hs.iterator();
+    		}
+    	}).distinct();
+		
+    	
+		for(OpenBitSet nonFD : nonFDsRDD.collect()) {
+			if (!negCover.contains(nonFD)) {
+				//System.out.println(" Add the above to negCover");
+				OpenBitSet equalAttrsCopy = nonFD.clone();
+				negCover.add(equalAttrsCopy);
+				newNonFds.add(equalAttrsCopy);
+			}
+		}
+		
+		posInCartesianPartition = posInCartesianPartition + batchSize;
+		
+		int partitionSize = (int) (numberTuples/numPartitions);
+		numComparisons = (long) partitionSize*partitionSize*batchSize;
+		numNewNonFds = newNonFds.size() - previousNegCoverSize;
+		float efficiency = (float) numNewNonFds/numComparisons;
+		System.out.println("new NonFDs: "+numNewNonFds+" # comparisons: "+numComparisons+" efficiency: "+efficiency+" efficiency threshold: "+efficiencyThreshold);
 	}
 	
-	public static void validatePositiveCover(final Broadcast<int[][]> b_table) {
+	
+	public static void validatePositiveCover() {
 		int numAttributes = numberAttributes;
-		long t1 = System.currentTimeMillis();
-		
+
 		List<FDTreeElementLhsPair> currentLevel = null;
 		if (level == 0) {
 			currentLevel = new ArrayList<>();
@@ -328,13 +399,13 @@ public class DistributedHyFD3 implements Serializable {
 		//ValidationResult validationResult = (this.executor == null) ? this.validateSequential(currentLevel, compressedRecords) : this.validateParallel(currentLevel, compressedRecords);
 		// The cost check of Validation vs Sampling happens inside validateSpark
 		//long t1 = System.currentTimeMillis();
-		long t2 = System.currentTimeMillis();
-		localComputationTime += t2-t1;
-		ValidationResult validationResult = validateSpark(currentLevel, b_table);
+		ValidationResult validationResult = validateSpark(currentLevel);
+		//long t2 = System.currentTimeMillis();
+		//genEQClassTime += t2 - t1;
 		
 		if(validationResult == null)
 			return;
-		long t3 = System.currentTimeMillis();
+		
 		// If the next level exceeds the predefined maximum lhs size, then we can stop here
 		/*if ((posCover.getMaxDepth() > -1) && (level >= posCover.getMaxDepth())) {
 			int numInvalidFds = validationResult.invalidFDs.size();
@@ -393,17 +464,15 @@ public class DistributedHyFD3 implements Serializable {
 		int numValidFds = validationResult.validations - numInvalidFds;
 		Logger.getInstance().writeln(validationResult.intersections + " intersections; " + validationResult.validations + " validations; " + numInvalidFds + " invalid; " + candidates + " new candidates; --> " + numValidFds + " FDs");
 		previousNumInvalidFds = numInvalidFds;
-		long t4 = System.currentTimeMillis();
-		localComputationTime += t4-t3;
+		
 		return;
 	}
 	
-	private static ValidationResult validateSpark(List<FDTreeElementLhsPair> currentLevel, Broadcast<int[][]> b_table) {
+	private static ValidationResult validateSpark(List<FDTreeElementLhsPair> currentLevel) {
 		long t1 = System.currentTimeMillis();
 		ValidationResult result = new ValidationResult();
 		
 		HashSet<OpenBitSet> uniquesToCompute = new HashSet<OpenBitSet>();
-		ArrayList<int[]> combination_arr = new ArrayList<int[]>();
         int full = 0; // checks how many entries added to combination_arr
         int l = 0;
         
@@ -427,38 +496,49 @@ public class DistributedHyFD3 implements Serializable {
 			}
         }
         long t2 = System.currentTimeMillis();
-        localComputationTime += t2 - t1;
+        genEQClassTime += t2 - t1;
         // Continue only if validation phase is cheaper, else return
         System.out.println("\n Uniques to compute: "+ uniquesToCompute.size() + " Sampling load: "+numberTuples/numPartitions);
         if(uniquesToCompute.size() > numberTuples/numPartitions) {
-        	FDList newNonFds = enrichNegativeCover(b_table);
+        	FDList newNonFds = enrichNegativeCover();
 			
         	// Check if newNonFDs were zero then going to sampling phase use useless, go ahead with validation
         	if(numNewNonFds != 0) {
-        		long t3 = System.currentTimeMillis();
         		inductor.updatePositiveCover(newNonFds);
-        		long t4 = System.currentTimeMillis();
-        		localComputationTime += t4-t3;
         		return null;
         	}
         }
-        
+        long t3 = System.currentTimeMillis();	
         //System.out.println(" Total uniques to compute l0 - l1: "+l0_count+" "+l1_count);
 		// compute uniques in batches via spark
-        LinkedList<OpenBitSet> batch = new LinkedList<OpenBitSet>();
+        //LinkedList<OpenBitSet> batch = new LinkedList<OpenBitSet>();
+        ArrayList<int[]> combination_arr = new ArrayList<int[]>();
         for(OpenBitSet bs : uniquesToCompute) {
-            //if(!level0_unique.containsKey(bs)) {
+        	//if(!level0_unique.containsKey(bs)) {
                 spComputation++;
-                batch.add(bs);
+                
+                int cardinality = (new Long(bs.cardinality())).intValue();
+                int[] bs_arr = new int[cardinality];
+                int m = 0;
+                for(int i = 0; i < numberAttributes; i++) {
+                    if(bs.get(i)) {
+                    	//System.out.print(i);
+                        bs_arr[m++] = i;
+                    }
+                }
+                //System.out.print(" ");
+                combination_arr.add(bs_arr);
                 full++;
             //}
+            
 
             if(full == validationBatchSize || l == uniquesToCompute.size()-1) { // then process the batch
-            	System.out.println("Running Spark job for batch size: "+batch.size());
-		        JavaRDD<OpenBitSet> combinationsRDD = sc.parallelize(batch);
-                Map<String, Integer> map = generateStrippedPartitions(combinationsRDD, b_table);
+            	System.out.println("Running Spark job for batch size: "+combination_arr.size());
+		        //JavaRDD<OpenBitSet> combinationsRDD = sc.parallelize(batch);
+            	long t4 = System.currentTimeMillis();
+                Map<String, Integer> map = generateStrippedPartitionsGroupBy(combination_arr, full);
+                System.out.println("  -- time: "+(System.currentTimeMillis() - t4)/1000);
                 Iterator<Entry<String, Integer>> entry_itr = map.entrySet().iterator();
-                long t3 = System.currentTimeMillis();
                 while(entry_itr.hasNext()){
                     Entry<String, Integer> e = entry_itr.next();
                     //System.out.println(e.getKey() + " count: " + e.getValue());
@@ -471,9 +551,6 @@ public class DistributedHyFD3 implements Serializable {
                 }
                 full = 0;
                 combination_arr = new ArrayList<int[]>();
-                batch = new LinkedList<OpenBitSet>();
-                long t4 = System.currentTimeMillis();
-                localComputationTime += t4-t3;
             }
             l++;
         }
@@ -483,7 +560,7 @@ public class DistributedHyFD3 implements Serializable {
          * After validation for this level then, assign level1_unique to level0_unique, 
          * and clear level1_unique for next iteration. 
          */
-        long t5 = System.currentTimeMillis();
+        
         for(FDTreeElementLhsPair elementLhsPair : currentLevel) {
         	ValidationResult localResult = new ValidationResult();
         	
@@ -513,39 +590,31 @@ public class DistributedHyFD3 implements Serializable {
 			
 			result.add(localResult);
         }
-        long t6 = System.currentTimeMillis();
-        localComputationTime += t6 - t5;
+        long t4 = System.currentTimeMillis();
+        genEQClassTime += t4 - t3;
 		return result;
 	}
 	
-	public static Map<String, Integer> generateStrippedPartitions(JavaRDD<OpenBitSet> combinationsRDD, final Broadcast<int[][]> b_table) {
-    	final Broadcast<Integer> b_numberAttributes = sc.broadcast(numberAttributes);
-    	JavaPairRDD<String, Integer> attrSpRDD2 = combinationsRDD.mapToPair(new PairFunction<OpenBitSet, String, Integer>(){
-    		public Tuple2<String, Integer> call(OpenBitSet b) {
-    			long t1 = System.currentTimeMillis();
-    			HashSet<ArrayList<Integer>> hashSet = new HashSet<ArrayList<Integer>>();
-    			String combination = "";
-    			int[][] table = b_table.value();
-    			for(int i = 0; i < b_numberAttributes.value(); i++) {
-    				if(b.get(i))
-    					combination += "_"+i;
-    			}
-    			for(int i = 0; i < table.length; i++){
-    				int[] row = table[i];
-    				ArrayList<Integer> value = new ArrayList<Integer>();
-    				for(int j = 0; j < b_numberAttributes.value(); j++) {
-        				if(b.get(j))
-        					value.add(row[j]);
-        			}
-    				hashSet.add(value);
-    			}
-    			long t2 = System.currentTimeMillis();
-				System.out.println(t2-t1);
-    			return new Tuple2<String, Integer>(combination, hashSet.size());
+	public static Map<String, Integer> generateStrippedPartitionsGroupBy(ArrayList<int[]> combinations, int num_combinations) {
+    	Map<String, Integer> result = new HashMap<String, Integer>();
+    	for(int i = 0; i < num_combinations; i++){
+    		List<String> comb = new ArrayList<String>();
+    		String combStr = "";
+    		for(int j = 0; j < combinations.get(i).length; j++) {
+    			comb.add(df.columns()[combinations.get(i)[j]]);
+    			combStr += "_"+combinations.get(i)[j];
+    			//System.out.println(i+" "+j+" "+combinations[i][j]+" "+ df.columns()[combinations[i][j]-1]);
     		}
-    	});
-    	return attrSpRDD2.collectAsMap();
-	}
+    		if(comb.isEmpty())
+    			continue;
+    		String firstC = comb.remove(0);
+    		Seq<String> combSeq = JavaConverters.asScalaIteratorConverter(comb.iterator()).asScala().toSeq();
+    		Long count = df.agg(functions.countDistinct(firstC, combSeq)).collectAsList().get(0).getLong(0);
+    		//System.out.println(" Count for "+firstC+" "+count);
+    		result.put(combStr, count.intValue());
+    	}
+    	return result;
+    }
 	
 	private static OpenBitSet extendWith(OpenBitSet lhs, int rhs, int extensionAttr) {
 		if (lhs.get(extensionAttr) || 											// Triviality: AA->C cannot be valid, because A->C is invalid
